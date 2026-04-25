@@ -94,10 +94,12 @@ Cloudflare Worker 免費方案每天 10 萬次請求，快取 30 天，幾乎用
 | `quality` | `number` | `0.85` | JPEG 品質 0–1 |
 | `scale` | `number` | `1` | 像素倍率，`2` 等於 Retina |
 | `meta` | `object`\|`function` | — | 隨圖片送出的額外欄位 |
-| `onSuccess` | `function` | — | 上傳成功 callback |
-| `onError` | `function` | — | 上傳失敗 callback |
+| `onSuccess` | `function` | — | 成功 callback。沒指定 `to`/`gcs` 時收到 `Blob`；有指定時收到 server 回應 |
+| `onError` | `function` | — | 失敗 callback |
 
 `background: false` 會回傳 `Promise`，可 `await`；`true` 不回傳值，純背景處理。
+
+`to` 和 `gcs` 都不填的話，dom-snapto 不會幫你上傳——它把 `Blob` 直接交給你的 `onSuccess`，要存哪裡、怎麼處理都是你的事（適合本地預覽、下載、自訂上傳協定）。
 
 ## 上傳目的地
 
@@ -168,6 +170,36 @@ DomSnapto.capture('.invoice-block', {
   format: 'png',
   scale:  2,
 });
+```
+
+### 不上傳，自己拿 Blob 處理
+
+不指定 `to` 和 `gcs`，`onSuccess` 會直接收到 `Blob`，後續想預覽、下載、塞進 `<canvas>` 比對、走自訂協定都行：
+
+```js
+DomSnapto.capture('#receipt', {
+  scale: 2,
+  onSuccess: function (blob) {
+    // 例：本地預覽
+    document.getElementById('preview').src = URL.createObjectURL(blob);
+
+    // 例：觸發下載
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'snapshot.jpg';
+    a.click();
+
+    // 例：走自家上傳協定
+    myCustomUploader.send(blob);
+  },
+});
+```
+
+也可以走 Promise（`background: false` 預設）：
+
+```js
+const blob = await DomSnapto.capture('#receipt', { scale: 2 });
+console.log('截圖大小:', blob.size, 'bytes');
 ```
 
 ## License

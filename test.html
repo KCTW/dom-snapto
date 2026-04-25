@@ -4,43 +4,180 @@
   <meta charset="UTF-8">
   <title>dom-snapto 測試</title>
   <style>
-    body { font-family: sans-serif; padding: 24px; max-width: 640px; }
-    #target {
-      border: 2px solid #333;
-      padding: 20px;
-      background: #f9f9f9;
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+      padding: 24px;
+      max-width: 720px;
+      margin: 0 auto;
+      background: #f4f5f7;
     }
-    #target img { max-width: 120px; vertical-align: middle; margin-right: 12px; }
-    .row { display: flex; align-items: center; margin-bottom: 12px; }
-    button { margin-top: 16px; padding: 10px 20px; font-size: 16px; cursor: pointer; }
-    label { display: block; margin-top: 12px; font-size: 14px; }
-    label input { width: 100%; padding: 6px; margin-top: 4px; box-sizing: border-box; }
-    #log { margin-top: 16px; color: #555; font-size: 13px; white-space: pre-wrap; }
-    #preview { margin-top: 16px; max-width: 100%; border: 1px solid #ccc; display: none; }
+    h1 { color: #2d3748; }
+    .controls {
+      background: white;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 24px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    label { display: block; margin-bottom: 8px; font-size: 13px; color: #4a5568; }
+    label input { width: 100%; padding: 8px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 14px; }
+    button {
+      margin-top: 12px;
+      padding: 10px 24px;
+      font-size: 15px;
+      cursor: pointer;
+      background: #4299e1;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    button:hover { background: #3182ce; }
+
+    /* ───── 截圖目標：模擬一個結帳頁 ───── */
+    #target {
+      background: white;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .header {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px 24px;
+    }
+    .header h2 { margin: 0; font-size: 18px; }
+    .header .order-id { font-size: 12px; opacity: 0.85; margin-top: 4px; }
+
+    .section { padding: 16px 24px; border-bottom: 1px solid #edf2f7; }
+    .section:last-child { border-bottom: none; }
+    .section h3 {
+      font-size: 13px;
+      color: #718096;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin: 0 0 12px;
+    }
+
+    .product {
+      display: flex;
+      gap: 12px;
+      padding: 10px 0;
+      border-bottom: 1px dashed #e2e8f0;
+    }
+    .product:last-child { border-bottom: none; }
+    .product img {
+      width: 64px; height: 64px;
+      object-fit: cover;
+      border-radius: 4px;
+      background: #f7fafc;
+    }
+    .product .info { flex: 1; }
+    .product .name { font-weight: 500; color: #2d3748; }
+    .product .meta { font-size: 12px; color: #718096; margin-top: 4px; }
+    .product .price { font-weight: 600; color: #2d3748; }
+
+    .pricing {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px 16px;
+      font-size: 14px;
+    }
+    .pricing .label { color: #4a5568; }
+    .pricing .value { text-align: right; }
+    .pricing .discount { color: #38a169; }
+    .pricing .total { font-size: 18px; font-weight: 700; color: #c53030; padding-top: 8px; border-top: 1px solid #e2e8f0; margin-top: 4px; }
+
+    .customer { font-size: 13px; line-height: 1.7; color: #4a5568; }
+    .customer strong { color: #2d3748; }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      background: #fed7d7;
+      color: #c53030;
+      margin-left: 6px;
+    }
+    .badge.green { background: #c6f6d5; color: #276749; }
+
+    /* ───── 結果 ───── */
+    #log { margin-top: 16px; color: #4a5568; font-size: 13px; padding: 8px; background: #edf2f7; border-radius: 4px; }
+    #preview { margin-top: 16px; max-width: 100%; border: 1px solid #cbd5e0; border-radius: 4px; display: none; }
   </style>
 </head>
 <body>
 
   <h1>dom-snapto 測試</h1>
 
-  <div id="target">
-    <h2>訂單摘要</h2>
-    <div class="row">
-      <img src="https://thumbnail.image.rakuten.co.jp/@0_mall/milicute-himawari/cabinet/10096580/xzt-2775-2.jpg?_ex=128x128" alt="商品圖">
-      <div>
-        <strong>測試商品 A × 2</strong><br>
-        優惠券：SAVE100
-      </div>
-    </div>
-    <p><strong>總金額：NT$ 899</strong></p>
+  <div class="controls">
+    <label>
+      Image proxy URL
+      <input id="proxy" type="text" value="https://img-proxy.kctw-dev.workers.dev" placeholder="https://your-worker.workers.dev">
+    </label>
+    <button id="btn">截取訂單畫面</button>
   </div>
 
-  <label>
-    Image proxy URL（選填，用於跨域圖片，例如 Cloudflare Worker）：
-    <input id="proxy" type="text" value="https://img-proxy.kctw-dev.workers.dev" placeholder="https://your-worker.workers.dev">
-  </label>
+  <div id="target">
+    <div class="header">
+      <h2>訂單確認</h2>
+      <div class="order-id">#ORD-20260425-X8K2 · 2026-04-25 22:30</div>
+    </div>
 
-  <button id="btn">截圖 #target</button>
+    <div class="section">
+      <h3>商品（共 3 件）</h3>
+
+      <div class="product">
+        <img src="https://thumbnail.image.rakuten.co.jp/@0_mall/milicute-himawari/cabinet/10096580/xzt-2775-2.jpg?_ex=128x128" alt="商品 1">
+        <div class="info">
+          <div class="name">パナソニック ES-LV5G 電動シェーバー</div>
+          <div class="meta">優惠券：SAVE100 <span class="badge green">已套用</span></div>
+        </div>
+        <div class="price">¥3,475</div>
+      </div>
+
+      <div class="product">
+        <img src="https://thumbnail.image.rakuten.co.jp/@0_mall/milicute-himawari/cabinet/10096580/xzt-2775-2.jpg?_ex=128x128" alt="商品 2">
+        <div class="info">
+          <div class="name">SHISEIDO 資生堂 ANESSA 防曬乳 60ml</div>
+          <div class="meta">SPF50+ PA++++ <span class="badge">缺貨可能</span></div>
+        </div>
+        <div class="price">¥1,980</div>
+      </div>
+
+      <div class="product">
+        <img src="https://thumbnail.image.rakuten.co.jp/@0_mall/milicute-himawari/cabinet/10096580/xzt-2775-2.jpg?_ex=128x128" alt="商品 3">
+        <div class="info">
+          <div class="name">無印良品 オーガニックコットン Tシャツ × 2</div>
+          <div class="meta">尺寸 L · 顏色 ネイビー</div>
+        </div>
+        <div class="price">¥3,580</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>費用明細</h3>
+      <div class="pricing">
+        <div class="label">商品小計</div>          <div class="value">¥9,035</div>
+        <div class="label">優惠券折抵</div>        <div class="value discount">−¥100</div>
+        <div class="label">國際運送（海運）</div>  <div class="value">¥1,200</div>
+        <div class="label">台灣配送（宅配）</div>  <div class="value">¥250</div>
+        <div class="label total">應付總金額</div>  <div class="value total">NT$ 2,485</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <h3>收貨資訊</h3>
+      <div class="customer">
+        <strong>陳○元</strong><br>
+        0983-***-962<br>
+        24263 新北市新莊區○林路 5***
+      </div>
+    </div>
+  </div>
 
   <div id="log">點按鈕開始截圖。</div>
   <img id="preview" alt="截圖預覽">
@@ -55,6 +192,7 @@
       var proxy = document.getElementById('proxy').value.trim();
       log.textContent = '截圖中…';
 
+      var t0 = Date.now();
       DomSnapto.capture('#target', {
         scale:    2,
         format:   'jpeg',
@@ -64,7 +202,7 @@
           var url = URL.createObjectURL(blob);
           preview.src = url;
           preview.style.display = 'block';
-          log.textContent = '截圖完成，大小：' + blob.size + ' bytes';
+          log.textContent = '截圖完成 · ' + Math.round(blob.size / 1024) + ' KB · 耗時 ' + (Date.now() - t0) + ' ms';
 
           var a = document.createElement('a');
           a.href = url;
