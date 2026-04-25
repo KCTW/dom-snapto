@@ -17,21 +17,23 @@
 
 ## 快速開始
 
-在頁面引入兩個檔案：
+引入腳本，並在頁面載入時呼叫一次 `init()` 預先註冊 Service Worker：
 
 ```html
 <script src="dom-snapto.js"></script>
+<script>
+  // 頁面載入時執行一次，提前把 SW 準備好
+  DomSnapto.init({ swPath: '/dom-snapto-sw.js' });
+</script>
 ```
 
-然後呼叫 `DomSnapto.capture()`：
+之後在任何地方呼叫 `capture()`：
 
 ```js
-// 點按鈕時，在背景截圖並上傳，不影響頁面操作
 document.getElementById('submit-btn').addEventListener('click', function () {
   DomSnapto.capture('#order-summary', {
-    to:         'https://your-server.com/upload',  // 你的接收端點
-    background: true,                              // 背景執行，不阻塞
-    swPath:     '/dom-snapto-sw.js',               // Service Worker 路徑
+    to:         'https://your-server.com/upload',
+    background: true,
   });
 });
 ```
