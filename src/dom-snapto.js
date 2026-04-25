@@ -98,75 +98,56 @@
 
   // ── element → Blob ────────────────────────────────────────────────────────
 
-  // 先用 CORS 直接試載，失敗才走 proxy；回傳需要 proxy 的 src Set
-  function detectAndPreload(el, proxyBase) {
+  // 把 Blob 轉成 data URI（base64）
+  function blobToDataURI(blob) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onloadend = function () { resolve(reader.result); };
+      reader.onerror   = function () { reject(reader.error); };
+      reader.readAsDataURL(blob);
+    });
+  }
+
+  // 偵測：直接 CORS 能載就不動；不能就走 proxy 抓成 data URI 備用
+  // 回傳 Map<原始 src, data URI>
+  function detectAndPrepare(el, proxyBase) {
     var imgs = Array.from(el.querySelectorAll('img')).filter(function (img) {
       return img.src && img.src.indexOf(proxyBase) === -1;
     });
 
-    var needsProxy = new Set();
+    var dataMap = new Map();
 
     return Promise.all(imgs.map(function (img) {
       return new Promise(function (resolve) {
-        // 先試直接 CORS 載入
         var direct = new Image();
         direct.crossOrigin = 'anonymous';
-        direct.onload = resolve; // 直接成功，不需要 proxy
+        direct.onload  = function () { resolve(); }; // 直接 OK，免處理
         direct.onerror = function () {
-          // 直接失敗，改走 proxy
-          var p = new Image();
-          p.crossOrigin = 'anonymous';
-          p.onload = function () { needsProxy.add(img.src); resolve(); };
-          p.onerror = resolve; // proxy 也失敗就放棄，不阻塞截圖
-          p.src = proxyBase + '?url=' + encodeURIComponent(img.src);
+          // 直接失敗 → fetch proxy → 轉 data URI
+          fetch(proxyBase + '?url=' + encodeURIComponent(img.src), { mode: 'cors' })
+            .then(function (r) { return r.ok ? r.blob() : null; })
+            .then(function (blob) { return blob ? blobToDataURI(blob) : null; })
+            .then(function (dataURI) {
+              if (dataURI) dataMap.set(img.src, dataURI);
+              resolve();
+            })
+            .catch(function () { resolve(); }); // 失敗放棄
         };
         direct.src = img.src;
       });
-    })).then(function () { return needsProxy; });
-  }
-
-  // 在 live DOM 換成 proxy URL 並等 onload；回傳還原函式
-  function swapToProxyAndAwait(el, proxyBase, needsProxy) {
-    var swaps = [];
-    var imgs  = Array.from(el.querySelectorAll('img'));
-
-    return Promise.all(imgs.map(function (img) {
-      var origSrc = img.src;
-      if (!needsProxy.has(origSrc)) return Promise.resolve();
-      return new Promise(function (resolve) {
-        swaps.push({ img: img, orig: origSrc, prevCrossOrigin: img.crossOrigin });
-        img.crossOrigin = 'anonymous';
-        img.onload  = function () { resolve(); };
-        img.onerror = function () { resolve(); }; // 失敗也繼續，那張會空白
-        img.src = proxyBase + '?url=' + encodeURIComponent(origSrc);
-      });
-    })).then(function () {
-      return function restore() {
-        swaps.forEach(function (s) {
-          s.img.crossOrigin = s.prevCrossOrigin;
-          s.img.src = s.orig;
-        });
-      };
-    });
+    })).then(function () { return dataMap; });
   }
 
   function elementToBlob(el, opts) {
     var proxyBase = opts.imgProxy ? opts.imgProxy.replace(/\/?$/, '') : null;
 
     var preload = proxyBase
-      ? detectAndPreload(el, proxyBase)
-      : Promise.resolve(new Set());
+      ? detectAndPrepare(el, proxyBase)
+      : Promise.resolve(new Map());
 
-    var restore = function () {};
-
-    return preload.then(function (needsProxy) {
-      return ensureH2C(opts.html2canvasUrl).then(function () { return needsProxy; });
-    }).then(function (needsProxy) {
-      // 在 live DOM 上把需要 proxy 的圖換掉，等載完才繼續
-      if (proxyBase && needsProxy.size > 0) {
-        return swapToProxyAndAwait(el, proxyBase, needsProxy).then(function (r) { restore = r; });
-      }
-    }).then(function () {
+    return preload.then(function (dataMap) {
+      return ensureH2C(opts.html2canvasUrl).then(function () { return dataMap; });
+    }).then(function (dataMap) {
       var h2cOpts = {
         useCORS:    true,
         allowTaint: false,
@@ -175,13 +156,18 @@
         scrollX:    0,
         scrollY:    0,
       };
+
+      // onclone 把 src 換成 data URI（同步、零載入時間，html2canvas 不會踩 race）
+      if (dataMap.size > 0) {
+        h2cOpts.onclone = function (doc) {
+          doc.querySelectorAll('img').forEach(function (img) {
+            var dataURI = dataMap.get(img.src);
+            if (dataURI) img.src = dataURI;
+          });
+        };
+      }
+
       return html2canvas(el, h2cOpts);
-    }).then(function (canvas) {
-      restore();
-      return canvas;
-    }, function (err) {
-      restore();
-      throw err;
     }).then(function (canvas) {
       var mime    = opts.format === 'png' ? 'image/png' : 'image/jpeg';
       var quality = opts.quality != null ? opts.quality : 0.85;
