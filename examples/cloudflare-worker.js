@@ -12,6 +12,7 @@
 // ── 只需維護這裡：你自己的網站網域 ──────────────────────────────────────────
 const ALLOWED_SITE_ORIGINS = [
   'bibian.co.jp',
+  'kctw.github.io',
   // 'your-other-site.co.jp',
 ];
 

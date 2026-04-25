@@ -251,9 +251,11 @@
       : selector;
 
     if (!el) return Promise.reject(new Error('[dom-snapto] element not found: ' + selector));
-    if (!opts.to && !opts.gcs) return Promise.reject(new Error('[dom-snapto] options.to or options.gcs is required'));
 
     return elementToBlob(el, opts).then(function (blob) {
+      // 沒指定上傳目的地 → 直接回傳 blob（本地測試 / 自行處理）
+      if (!opts.to && !opts.gcs) return blob;
+
       if (opts.background) {
         queueAndSync(blob, opts);
         return {};
