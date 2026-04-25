@@ -28,7 +28,7 @@
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var H2C_URL  = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+  var H2C_URL  = 'https://cdn.jsdelivr.net/npm/html2canvas-pro@2.0.2/dist/html2canvas-pro.min.js';
   var DB_NAME  = 'dom-snapto';
   var DB_STORE = 'queue';
   var SYNC_TAG = 'dom-snapto-upload';
@@ -183,16 +183,25 @@
   // ── upload helpers ────────────────────────────────────────────────────────
 
   function uploadToUrl(blob, opts) {
-    var meta = typeof opts.meta === 'function' ? opts.meta() : (opts.meta || {});
+    var meta      = typeof opts.meta === 'function' ? opts.meta() : (opts.meta || {});
+    var imgField  = opts.imageField || 'image';
+    var ext       = opts.format === 'png' ? 'png' : 'jpg';
+
     var form = new FormData();
-    form.append('image', blob, 'snapshot.' + (opts.format === 'png' ? 'png' : 'jpg'));
+    form.append(imgField, blob, 'snapshot.' + ext);
     form.append('capturedAt', new Date().toISOString());
     form.append('pageUrl', location.href);
     Object.keys(meta).forEach(function (k) { form.append(k, meta[k]); });
 
-    return fetch(opts.to, { method: 'POST', body: form }).then(function (res) {
+    return fetch(opts.to, {
+      method:      'POST',
+      body:        form,
+      credentials: opts.credentials || 'same-origin',
+    }).then(function (res) {
       if (!res.ok) throw new Error('[dom-snapto] server returned ' + res.status);
-      return res.json().catch(function () { return {}; });
+      return res.text().then(function (t) {
+        try { return JSON.parse(t); } catch (_) { return { ok: true, body: t }; }
+      });
     });
   }
 
@@ -234,13 +243,15 @@
 
     var meta = typeof opts.meta === 'function' ? opts.meta() : (opts.meta || {});
     var record = {
-      blob:      blob,
-      to:        opts.to  || null,
-      gcs:       opts.gcs || null,
-      format:    opts.format || 'jpeg',
-      meta:      meta,
-      pageUrl:   location.href,
-      createdAt: new Date().toISOString(),
+      blob:        blob,
+      to:          opts.to  || null,
+      gcs:         opts.gcs || null,
+      format:      opts.format || 'jpeg',
+      imageField:  opts.imageField || null,
+      credentials: opts.credentials || null,
+      meta:        meta,
+      pageUrl:     location.href,
+      createdAt:   new Date().toISOString(),
     };
 
     dbPut(record).then(function () {

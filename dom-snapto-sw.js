@@ -55,15 +55,22 @@ function uploadJob(job) {
 }
 
 function uploadToUrl(job) {
+  var imgField = job.imageField || 'image';
+  var ext      = job.format === 'png' ? 'png' : 'jpg';
+
   var form = new FormData();
-  form.append('image', job.blob, 'snapshot.' + (job.format === 'png' ? 'png' : 'jpg'));
+  form.append(imgField, job.blob, 'snapshot.' + ext);
   form.append('capturedAt', job.createdAt);
   form.append('pageUrl',    job.pageUrl || '');
   var meta = job.meta || {};
   Object.keys(meta).forEach(function (k) { form.append(k, meta[k]); });
 
-  return fetch(job.to, { method: 'POST', body: form }).then(function (res) {
-    if (!res.ok) throw new Error('dom-snaptoto-sw: server returned ' + res.status);
+  return fetch(job.to, {
+    method:      'POST',
+    body:        form,
+    credentials: job.credentials || 'same-origin',
+  }).then(function (res) {
+    if (!res.ok) throw new Error('dom-snapto-sw: server returned ' + res.status);
   });
 }
 
