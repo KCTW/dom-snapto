@@ -23,17 +23,21 @@
     label { display: block; margin-bottom: 8px; font-size: 13px; color: #4a5568; }
     label input { width: 100%; padding: 8px; border: 1px solid #cbd5e0; border-radius: 4px; font-size: 14px; }
     button {
-      margin-top: 12px;
-      padding: 10px 24px;
-      font-size: 15px;
+      padding: 10px 16px;
+      font-size: 14px;
       cursor: pointer;
-      background: #4299e1;
-      color: white;
+      background: #e2e8f0;
+      color: #2d3748;
       border: none;
       border-radius: 4px;
       font-weight: 600;
     }
-    button:hover { background: #3182ce; }
+    button:hover { background: #cbd5e0; }
+    button.primary { background: #4299e1; color: white; }
+    button.primary:hover { background: #3182ce; }
+    button.warn { background: #ed8936; color: white; }
+    button.warn:hover { background: #dd6b20; }
+    .btn-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
 
     /* ───── 截圖目標：模擬一個結帳頁 ───── */
     #target {
@@ -115,10 +119,18 @@
 
   <div class="controls">
     <label>
-      Image proxy URL
+      Image proxy URL（解跨域圖片空白問題）
       <input id="proxy" type="text" value="https://img-proxy.kctw-dev.workers.dev" placeholder="https://your-worker.workers.dev">
     </label>
-    <button id="btn">截取訂單畫面</button>
+    <label>
+      Webhook URL（前景/背景上傳會 POST 到這裡。預填一個 demo 用的 webhook.site，<a href="https://webhook.site/#!/view/b09dad46-433e-4918-8b3b-8484c031d5bb" target="_blank" rel="noopener">點這裡看收到的請求</a>。要用自己的請去 <a href="https://webhook.site" target="_blank" rel="noopener">webhook.site</a> 拿）
+      <input id="webhook" type="text" value="https://webhook.site/b09dad46-433e-4918-8b3b-8484c031d5bb" placeholder="https://webhook.site/xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+    </label>
+    <div class="btn-row">
+      <button id="btn-local"  class="primary">本地下載</button>
+      <button id="btn-fg">前景上傳</button>
+      <button id="btn-bg" class="warn">背景上傳 + 跳轉</button>
+    </div>
   </div>
 
   <div id="target">
@@ -193,35 +205,97 @@
 
   <script src="src/dom-snapto.js"></script>
   <script>
-    DomSnapto.init({});
+    var log = document.getElementById('log');
+    var preview = document.getElementById('preview');
 
-    document.getElementById('btn').addEventListener('click', function () {
-      var log = document.getElementById('log');
-      var preview = document.getElementById('preview');
-      var proxy = document.getElementById('proxy').value.trim();
-      log.textContent = '截圖中…';
+    function getProxy()   { return document.getElementById('proxy').value.trim()   || undefined; }
+    function getWebhook() { return document.getElementById('webhook').value.trim() || ''; }
 
+    function setLog(msg)  { log.textContent = msg; }
+
+    function showPreview(blob) {
+      var url = URL.createObjectURL(blob);
+      preview.src = url;
+      preview.style.display = 'block';
+    }
+
+    // 預先註冊 SW（背景模式才用得到，但提早註冊比較順）
+    DomSnapto.init({ swPath: 'dom-snapto-sw.js' });
+
+    // ── 模式 1：本地下載（不上傳） ───────────────────────────────────────────
+    document.getElementById('btn-local').addEventListener('click', function () {
+      setLog('截圖中…');
       var t0 = Date.now();
       DomSnapto.capture('#target', {
         scale:    2,
         format:   'jpeg',
         quality:  0.9,
-        imgProxy: proxy || undefined,
+        imgProxy: getProxy(),
         onSuccess: function (blob) {
-          var url = URL.createObjectURL(blob);
-          preview.src = url;
-          preview.style.display = 'block';
-          log.textContent = '截圖完成 · ' + Math.round(blob.size / 1024) + ' KB · 耗時 ' + (Date.now() - t0) + ' ms';
-
+          showPreview(blob);
+          setLog('本地截圖完成 · ' + Math.round(blob.size / 1024) + ' KB · 耗時 ' + (Date.now() - t0) + ' ms');
           var a = document.createElement('a');
-          a.href = url;
-          a.download = 'snapshot-test.jpg';
+          a.href = URL.createObjectURL(blob);
+          a.download = 'snapshot-local.jpg';
           a.click();
         },
-        onError: function (err) {
-          log.textContent = '截圖失敗：' + err.message;
-        },
+        onError: function (err) { setLog('失敗：' + err.message); },
       });
+    });
+
+    // ── 模式 2：前景上傳 ───────────────────────────────────────────────────
+    document.getElementById('btn-fg').addEventListener('click', function () {
+      var to = getWebhook();
+      if (!to) { setLog('請先填 Webhook URL'); return; }
+      setLog('截圖 + 上傳中…');
+      var t0 = Date.now();
+      DomSnapto.capture('#target', {
+        to:       to,
+        scale:    2,
+        imgProxy: getProxy(),
+        meta:     { mode: 'foreground', orderId: 'DEMO-FG-' + Date.now() },
+        onSuccess: function () {
+          setLog('前景上傳完成，耗時 ' + (Date.now() - t0) + ' ms。到 webhook.site 看收到的請求。');
+        },
+        onError: function (err) { setLog('上傳失敗：' + err.message); },
+      });
+    });
+
+    // ── 模式 3：背景上傳 + 跳轉（驗證 SW 存活） ─────────────────────────────
+    document.getElementById('btn-bg').addEventListener('click', function () {
+      var to = getWebhook();
+      if (!to) { setLog('請先填 Webhook URL'); return; }
+      if (!('serviceWorker' in navigator)) { setLog('此瀏覽器不支援 Service Worker'); return; }
+
+      setLog('排隊中… blob 進 IndexedDB 後會自動跳轉到 about:blank');
+
+      var t0 = Date.now();
+      DomSnapto.capture('#target', {
+        to:         to,
+        background: true,
+        scale:      2,
+        imgProxy:   getProxy(),
+        meta:       { mode: 'background-survival', orderId: 'DEMO-BG-' + Date.now() },
+      });
+
+      // 輪詢 IndexedDB，等 blob 進佇列再跳走
+      var poll = setInterval(function () {
+        var req = indexedDB.open('dom-snapto', 1);
+        req.onsuccess = function (e) {
+          var db = e.target.result;
+          var tx = db.transaction('queue', 'readonly');
+          var getAll = tx.objectStore('queue').getAll();
+          getAll.onsuccess = function (ev) {
+            if (ev.target.result.length > 0) {
+              clearInterval(poll);
+              setLog('已排隊（' + (Date.now() - t0) + ' ms），跳轉中…');
+              setTimeout(function () { location.href = 'about:blank'; }, 200);
+            }
+          };
+        };
+      }, 100);
+
+      setTimeout(function () { clearInterval(poll); }, 15000);
     });
   </script>
 
