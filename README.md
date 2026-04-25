@@ -1,36 +1,46 @@
 # dom-snapto
 
-把任意 DOM 元素拍成圖片並上傳——就算使用者關掉分頁或頁面跳轉，上傳仍會自動完成。
+> 在使用者眼前那一刻，把畫面拍下來。即使分頁關掉、頁面跳轉，上傳依然會完成。
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](package.json)
+
+## 為什麼需要這個
+
+| 一般做法 | 問題 |
+|---------|------|
+| 後端用 Puppeteer 重抓頁面 | 踩到 Cloudflare 機器人偵測，常常抓不到 |
+| `html2canvas` + `fetch` | 使用者按完按鈕馬上跳轉，上傳常常斷掉 |
+| 用 html2canvas 截圖 | 跨域 CDN（Rakuten、Amazon）圖片在 canvas 裡變空白 |
+
+**dom-snapto 把這三個問題一起解決。**
+
+## 核心特色
+
+- **真的會送達**：用 Service Worker + Background Sync 排隊到 IndexedDB，使用者關掉分頁、頁面跳轉、瀏覽器當機，下次開啟仍會重試直到送出
+- **跨域圖片不空白**：自動偵測哪些圖需要 proxy，搭配一個 Cloudflare Worker 免費完整處理
+- **零 server-side 截圖**：完全在使用者瀏覽器跑，不會觸發 CDN 的機器人偵測
+- **老瀏覽器不掛**：偵測 SW 不支援時，自動降級到 `sendBeacon` 或 `fetch`
 
 ## 適用場景
 
-- 客人按下付款前，先截圖保存當下的訂單畫面
-- 使用者同意條款的瞬間，留存他看到的內容
-- 表單送出前，記錄填寫狀態
+- 客人按下「付款」前，留存當下訂單畫面以便日後糾紛舉證
+- 使用者同意條款的瞬間，記錄他實際看到的內容
+- 表單送出前，記下填寫狀態作為證據
 
-## 運作原理
-
-1. 用 `html2canvas` 把指定的 DOM 元素渲染成圖片
-2. 圖片暫存在 **IndexedDB**
-3. **Service Worker** 透過 Background Sync 在背景上傳
-4. 不支援的瀏覽器自動降級：`sendBeacon` → `fetch`
-
-## 快速開始
-
-引入腳本，並在頁面載入時呼叫一次 `init()` 預先註冊 Service Worker：
+## 30 秒上手
 
 ```html
 <script src="dom-snapto.js"></script>
 <script>
-  // 頁面載入時執行一次，提前把 SW 準備好
+  // 頁面載入時呼叫一次，提前把 Service Worker 準備好
   DomSnapto.init({ swPath: '/dom-snapto-sw.js' });
 </script>
 ```
 
-之後在任何地方呼叫 `capture()`：
-
 ```js
-document.getElementById('submit-btn').addEventListener('click', function () {
+// 使用者按下付款前截圖，背景上傳不擋畫面
+payButton.addEventListener('click', function () {
   DomSnapto.capture('#order-summary', {
     to:         'https://your-server.com/upload',
     background: true,
@@ -38,56 +48,78 @@ document.getElementById('submit-btn').addEventListener('click', function () {
 });
 ```
 
-## 參數說明
+就這樣。即使 `payButton` 點擊後馬上跳轉到金流頁，截圖仍會在背景送達伺服器。
+
+## 跨域圖片：Cloudflare Worker 加速器
+
+如果你截的頁面有跨域圖片（例如 Rakuten CDN、Amazon 商品圖），這些圖在 canvas 裡會變空白——這是瀏覽器的 CORS 限制，跟 dom-snapto 無關。
+
+解法是在中間加一層 image proxy 補上 CORS headers。我們提供一個現成的 Cloudflare Worker：
 
 ```js
-DomSnapto.capture(selector, options)
+DomSnapto.capture('#order', {
+  to:       'https://your-server.com/upload',
+  imgProxy: 'https://your-worker.workers.dev',
+});
 ```
+
+加上 `imgProxy` 之後 dom-snapto 會：
+
+1. 對每張圖先嘗試直接 CORS 載入
+2. 失敗的圖才走 proxy（節省 Worker 用量）
+3. 預載完成才開始截圖，避免空白
+
+Cloudflare Worker 免費方案每天 10 萬次請求，快取 30 天，幾乎用不完。完整範例見 [examples/cloudflare-worker.js](examples/cloudflare-worker.js)。
+
+## 完整 API
+
+### `DomSnapto.init(options)`
+
+| 參數 | 類型 | 說明 |
+|------|------|------|
+| `swPath` | `string` | Service Worker 檔案路徑（啟用 background 模式時必填） |
+| `imgProxy` | `string` | 全域 image proxy URL，會被 `capture()` 預設使用 |
+
+### `DomSnapto.capture(selector, options)`
 
 | 參數 | 類型 | 預設值 | 說明 |
 |------|------|--------|------|
-| `to` | `string` | — | 圖片要 POST 過去的 URL |
-| `gcs` | `object` | — | 直接上傳到 GCS，見下方說明 |
-| `background` | `boolean` | `false` | `true` = 背景執行，不等結果；分頁關掉也會繼續 |
-| `swPath` | `string` | — | `dom-snapto-sw.js` 的路徑，啟用背景模式時必填 |
+| `to` | `string` | — | 圖片 POST 過去的 URL |
+| `gcs` | `object` | — | GCS Signed URL 設定（見下方） |
+| `background` | `boolean` | `false` | `true` = 背景執行；分頁關掉也會繼續 |
+| `imgProxy` | `string` | — | 跨域圖片 proxy 根 URL |
 | `format` | `'jpeg'`\|`'png'` | `'jpeg'` | 圖片格式 |
-| `quality` | `number` | `0.85` | JPEG 壓縮品質，0–1 |
-| `scale` | `number` | `1` | 像素倍率，`2` 等於 Retina 解析度 |
-| `meta` | `object`\|`function` | — | 隨圖片一起送出的額外欄位 |
-| `imgProxy` | `string` | — | 圖片 proxy 根 URL（如 Cloudflare Worker）。截圖前自動把所有 `img.src` 換成 proxy URL，解決 Rakuten CDN 等跨域圖片空白問題 |
-| `html2canvasUrl` | `string` | cdnjs | 自訂 html2canvas 的來源網址 |
-| `onSuccess` | `function` | — | 上傳成功後呼叫，收到伺服器回應 |
-| `onError` | `function` | — | 上傳失敗後呼叫 |
+| `quality` | `number` | `0.85` | JPEG 品質 0–1 |
+| `scale` | `number` | `1` | 像素倍率，`2` 等於 Retina |
+| `meta` | `object`\|`function` | — | 隨圖片送出的額外欄位 |
+| `onSuccess` | `function` | — | 上傳成功 callback |
+| `onError` | `function` | — | 上傳失敗 callback |
 
-- `background: false`（預設）：回傳 `Promise`，可以 `await`，等上傳完再繼續
-- `background: true`：不回傳值，直接在背景處理，不影響任何前端操作
+`background: false` 會回傳 `Promise`，可 `await`；`true` 不回傳值，純背景處理。
 
 ## 上傳目的地
 
-### 上傳到自己的伺服器
+### 自家伺服器
 
-圖片用 `multipart/form-data` 格式送出，欄位如下：
+`multipart/form-data` 格式，欄位：
 
 | 欄位 | 內容 |
 |------|------|
 | `image` | 圖片檔案 |
-| `capturedAt` | 截圖時的 ISO 8601 時間戳 |
-| `pageUrl` | 截圖當下的頁面網址 |
-| `meta` 裡的欄位 | 一併附上 |
+| `capturedAt` | ISO 8601 時間戳 |
+| `pageUrl` | 截圖當下的網址 |
+| `meta` 內容 | 一併附上 |
 
-### 上傳到 Google Cloud Storage（GCS）
+### Google Cloud Storage
 
-由你的後端產生一個有時效的 Signed URL，傳給前端，插件直接 PUT 到 GCS，不需要任何代理：
+由你的後端產生 Signed URL，前端直接 PUT 到 GCS，不需要中間 server：
 
 ```js
-// 1. 從你的後端取得 Signed URL
 const { signedUrl } = await fetch('/api/gcs-signed-url').then(r => r.json());
 
-// 2. 直接上傳到 GCS
 DomSnapto.capture('#receipt', {
   gcs:        { signedUrl },
   background: true,
-  swPath:     '/dom-snapto-sw.js',
 });
 ```
 
@@ -95,57 +127,38 @@ DomSnapto.capture('#receipt', {
 
 | 環境 | 行為 |
 |------|------|
-| 支援 Service Worker + Background Sync | 分頁關掉或頁面跳轉後仍會完成上傳 |
-| 只支援 Service Worker | 頁面跳轉後繼續；下次開啟瀏覽器時重試 |
-| 支援 `sendBeacon`（圖片 < 60 KB） | 頁面跳轉後仍會送出 |
-| 以上都不支援 | 在分頁開著的情況下 `fetch` 上傳 |
-
-## Service Worker 設定
-
-把 `dom-snapto-sw.js` 放到網站根目錄（必須與頁面同源）：
-
-```
-/dom-snapto-sw.js   ← 放這裡
-/dom-snapto.js
-```
-
-在 `options.swPath` 填好路徑後，插件會自動幫你註冊，不需要額外的程式碼。
+| Service Worker + Background Sync | 分頁關掉、頁面跳轉後仍完成上傳 |
+| 只支援 Service Worker | 頁面跳轉後繼續；下次開瀏覽器重試 |
+| 支援 `sendBeacon`（< 60 KB） | 頁面跳轉後仍會送出 |
+| 以上都不支援 | 分頁開著的話 `fetch` 上傳 |
 
 ## 完整範例
 
-### 等截圖上傳完，再繼續後續動作
+### 等截圖完成才送出表單
 
 ```js
-document.querySelector('form').addEventListener('submit', async function (e) {
+form.addEventListener('submit', async function (e) {
   e.preventDefault();
-
   await DomSnapto.capture('#checkout-form', {
     to:   'https://your-server.com/upload',
     meta: { userId: currentUser.id },
   });
-
-  // 上傳完成後才送出表單
   e.target.submit();
 });
 ```
 
-### 背景截圖，附加自訂資料
+### 背景截圖 + 動態欄位
 
 ```js
 DomSnapto.capture('#cart-summary', {
   to:         'https://your-server.com/upload',
   background: true,
-  swPath:     '/dom-snapto-sw.js',
-  meta: function () {
-    return { orderId: window.currentOrderId };
-  },
-  onError: function (err) {
-    console.warn('截圖失敗', err);
-  },
+  meta: function () { return { orderId: window.currentOrderId }; },
+  onError: function (err) { console.warn('截圖失敗', err); },
 });
 ```
 
-### 截特定元素，高解析度 PNG
+### 高解析度 PNG
 
 ```js
 DomSnapto.capture('.invoice-block', {
@@ -157,4 +170,4 @@ DomSnapto.capture('.invoice-block', {
 
 ## License
 
-MIT
+[MIT](LICENSE) © 2026 KCTW
