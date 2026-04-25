@@ -2,6 +2,10 @@
  * dom-snapto.js v0.1.0
  * Capture any DOM element and upload it — even if the tab is closed mid-flight.
  *
+ * Copyright (c) 2026 KCTW
+ * GitHub:  https://github.com/KCTW/dom-snapto
+ * License: MIT (https://github.com/KCTW/dom-snapto/blob/main/LICENSE)
+ *
  * 使用方式：
  *   DomSnapto.init({ swPath: '/dom-snapto-sw.js' });   // 頁面載入時執行一次
  *   DomSnapto.capture('#selector', options);            // 之後隨時呼叫

@@ -1,10 +1,14 @@
-/**
- * dom-snaptoto-sw.js  —  Service Worker
+/*!
+ * dom-snapto-sw.js  —  Service Worker
  * Reads queued capture jobs from IndexedDB and uploads them.
  * Runs even after the originating tab is closed or navigated away.
  *
+ * Copyright (c) 2026 KCTW
+ * GitHub:  https://github.com/KCTW/dom-snapto
+ * License: MIT (https://github.com/KCTW/dom-snapto/blob/main/LICENSE)
+ *
  * Register from your page:
- *   navigator.serviceWorker.register('/dom-snaptoto-sw.js')
+ *   navigator.serviceWorker.register('/dom-snapto-sw.js')
  */
 
 var DB_NAME  = 'dom-snapto';
