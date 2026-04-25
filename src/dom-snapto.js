@@ -2,13 +2,14 @@
  * dom-snapto.js v0.1.0
  * Capture any DOM element and upload it — even if the tab is closed mid-flight.
  *
- * DomSnapto.capture('#selector', options) → Promise | void
+ * 使用方式：
+ *   DomSnapto.init({ swPath: '/dom-snapto-sw.js' });   // 頁面載入時執行一次
+ *   DomSnapto.capture('#selector', options);            // 之後隨時呼叫
  *
- * Options:
+ * capture() Options:
  *   to            {string}          POST endpoint URL
  *   gcs           {object}          { signedUrl, contentType? } — PUT directly to GCS
  *   background    {boolean}         true = fire-and-forget; tab close still completes (default: false)
- *   swPath        {string}          path to dom-snapto-sw.js (required when background:true)
  *   format        {'jpeg'|'png'}    (default: 'jpeg')
  *   quality       {number}          0–1, jpeg only (default: 0.85)
  *   scale         {number}          device pixel ratio (default: 1)
@@ -31,6 +32,11 @@
   var DB_STORE = 'queue';
   var SYNC_TAG = 'dom-snapto-upload';
 
+  // ── global config (set by init()) ─────────────────────────────────────────
+
+  var _config = {};
+  var _swReady = null; // Promise, resolved after SW registration
+
   // ── html2canvas loader (singleton) ────────────────────────────────────────
 
   var _h2cReady = null;
@@ -46,6 +52,23 @@
       document.head.appendChild(s);
     });
     return _h2cReady;
+  }
+
+  // ── Service Worker registration (singleton) ───────────────────────────────
+
+  function ensureSW(swPath) {
+    if (_swReady) return _swReady;
+    if (!swPath || !('serviceWorker' in navigator)) {
+      _swReady = Promise.resolve(null);
+      return _swReady;
+    }
+    _swReady = navigator.serviceWorker.register(swPath)
+      .then(function () { return navigator.serviceWorker.ready; })
+      .catch(function (err) {
+        console.warn('[dom-snapto] SW registration failed:', err);
+        return null;
+      });
+    return _swReady;
   }
 
   // ── IndexedDB helpers ─────────────────────────────────────────────────────
@@ -66,7 +89,7 @@
       return new Promise(function (resolve, reject) {
         var tx  = db.transaction(DB_STORE, 'readwrite');
         var req = tx.objectStore(DB_STORE).add(record);
-        req.onsuccess = function (e) { resolve(e.target.result); }; // returns id
+        req.onsuccess = function (e) { resolve(e.target.result); };
         req.onerror   = function (e) { reject(e.target.error); };
       });
     });
@@ -96,7 +119,7 @@
     });
   }
 
-  // ── upload (foreground path) ──────────────────────────────────────────────
+  // ── upload helpers ────────────────────────────────────────────────────────
 
   function uploadToUrl(blob, opts) {
     var meta = typeof opts.meta === 'function' ? opts.meta() : (opts.meta || {});
@@ -126,39 +149,33 @@
   // ── support detection ─────────────────────────────────────────────────────
 
   var support = {
-    serviceWorker:   'serviceWorker' in navigator,
-    backgroundSync:  false, // resolved lazily after SW registration
-    indexedDB:       'indexedDB' in self,
-    sendBeacon:      'sendBeacon' in navigator,
-    fetch:           'fetch' in self,
+    serviceWorker: 'serviceWorker' in navigator,
+    indexedDB:     'indexedDB' in self,
+    sendBeacon:    'sendBeacon' in navigator,
   };
 
-  // ── background path: degradation chain ───────────────────────────────────
+  // ── background path ───────────────────────────────────────────────────────
   //
-  //  1. Service Worker + Background Sync  (survives tab close & navigation)
-  //  2. Service Worker + postMessage      (survives navigation, not close)
-  //  3. sendBeacon                        (survives navigation, size-limited)
-  //  4. fetch (fire-and-forget)           (tab must stay open)
+  //  1. SW + Background Sync  → 分頁關掉、頁面跳轉後仍完成
+  //  2. SW + postMessage      → 頁面跳轉後繼續，不支援關掉後繼續
+  //  3. sendBeacon            → 頁面跳轉後繼續，有大小限制
+  //  4. fetch (fire-and-forget)
 
   function queueAndSync(blob, opts) {
     if (!support.serviceWorker || !support.indexedDB) {
-      // Tier 3 — sendBeacon for small blobs, otherwise best-effort fetch
       if (support.sendBeacon && blob.size < 60 * 1024) {
         navigator.sendBeacon(opts.to || opts.gcs.signedUrl, blob);
       } else {
-        var upload = opts.gcs ? uploadToGCS(blob, opts) : uploadToUrl(blob, opts);
-        upload.catch(function () {});
+        (opts.gcs ? uploadToGCS(blob, opts) : uploadToUrl(blob, opts)).catch(function () {});
       }
       return;
     }
 
     var meta = typeof opts.meta === 'function' ? opts.meta() : (opts.meta || {});
-
-    // Store the job in IndexedDB so the SW can retrieve it after tab close
     var record = {
       blob:      blob,
-      to:        opts.to   || null,
-      gcs:       opts.gcs  || null,
+      to:        opts.to  || null,
+      gcs:       opts.gcs || null,
       format:    opts.format || 'jpeg',
       meta:      meta,
       pageUrl:   location.href,
@@ -166,27 +183,14 @@
     };
 
     dbPut(record).then(function () {
-      return navigator.serviceWorker.ready;
+      return _swReady;
     }).then(function (reg) {
-      if ('sync' in reg) {
-        return reg.sync.register(SYNC_TAG);
-      }
-      // Background Sync not supported — ask SW to upload now via postMessage
+      if (!reg) throw new Error('no SW');
+      if ('sync' in reg) return reg.sync.register(SYNC_TAG);
       reg.active && reg.active.postMessage({ type: 'DOM_SNAP_FLUSH' });
     }).catch(function (err) {
-      console.warn('[dom-snapto] background queue failed:', err);
-      // Last resort: try uploading directly
-      var upload = opts.gcs ? uploadToGCS(blob, opts) : uploadToUrl(blob, opts);
-      upload.catch(function () {});
-    });
-  }
-
-  function ensureSW(swPath) {
-    if (!swPath || !('serviceWorker' in navigator)) return Promise.resolve();
-    return navigator.serviceWorker.register(swPath).then(function () {
-      return navigator.serviceWorker.ready;
-    }).catch(function (err) {
-      console.warn('[dom-snapto] SW registration failed:', err);
+      console.warn('[dom-snapto] background queue failed, falling back:', err);
+      (opts.gcs ? uploadToGCS(blob, opts) : uploadToUrl(blob, opts)).catch(function () {});
     });
   }
 
@@ -213,31 +217,41 @@
 
   return {
     /**
-     * Capture a DOM element and upload it.
-     *
-     * @param  {string|Element} selector  CSS selector or DOM element
-     * @param  {object}         opts      See header for all options
-     * @returns {Promise|undefined}       Resolves with server response, or
-     *                                   undefined when background:true.
+     * 頁面載入時呼叫一次，提前註冊 Service Worker。
+     * @param {object} options
+     * @param {string} options.swPath  dom-snapto-sw.js 的路徑
+     */
+    init: function (options) {
+      _config = options || {};
+      if (_config.swPath) ensureSW(_config.swPath);
+    },
+
+    /**
+     * 截圖並上傳。
+     * @param  {string|Element} selector  CSS selector 或 DOM 元素
+     * @param  {object}         opts      見檔案頂部的 Options 說明
+     * @returns {Promise|undefined}
      */
     capture: function (selector, opts) {
       opts = opts || {};
 
-      // Register SW early so it's ready by the time we need it
-      if (opts.background && opts.swPath) ensureSW(opts.swPath);
+      // 合併 init() 帶入的全域設定
+      var merged = {};
+      for (var k in _config) merged[k] = _config[k];
+      for (var k in opts)    merged[k] = opts[k];
 
-      var promise = run(selector, opts)
+      var promise = run(selector, merged)
         .then(function (result) {
-          if (opts.onSuccess) opts.onSuccess(result);
+          if (merged.onSuccess) merged.onSuccess(result);
           return result;
         })
         .catch(function (err) {
           console.error(err.message);
-          if (opts.onError) opts.onError(err);
+          if (merged.onError) merged.onError(err);
           throw err;
         });
 
-      if (opts.background) {
+      if (merged.background) {
         promise.catch(function () {});
         return;
       }

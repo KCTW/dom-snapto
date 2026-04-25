@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>dom-snapto 測試</title>
+  <style>
+    body { font-family: sans-serif; padding: 24px; }
+    #target {
+      border: 2px solid #333;
+      padding: 20px;
+      max-width: 400px;
+      background: #f9f9f9;
+    }
+    button { margin-top: 16px; padding: 10px 20px; font-size: 16px; cursor: pointer; }
+    #log { margin-top: 16px; color: #555; font-size: 13px; white-space: pre-wrap; }
+    #preview { margin-top: 16px; max-width: 100%; border: 1px solid #ccc; display: none; }
+  </style>
+</head>
+<body>
+
+  <div id="target">
+    <h2>訂單摘要</h2>
+    <p>商品：測試商品 A × 2</p>
+    <p>優惠券：SAVE100</p>
+    <p><strong>總金額：NT$ 899</strong></p>
+  </div>
+
+  <button id="btn">截圖 #target 並下載</button>
+
+  <div id="log">等待截圖…</div>
+  <img id="preview" alt="截圖預覽">
+
+  <script src="src/dom-snapto.js"></script>
+  <script>
+    // 初始化（這裡沒有後端，不傳 to/gcs，改為直接預覽）
+    DomSnapto.init({
+      // swPath: '/dom-snapto-sw.js',  // 有後端時才啟用
+    });
+
+    document.getElementById('btn').addEventListener('click', function () {
+      var log = document.getElementById('log');
+      var preview = document.getElementById('preview');
+      log.textContent = '截圖中…';
+
+      // 直接用 html2canvas 預覽（不上傳，方便本機測試）
+      var s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+      document.head.appendChild(s);
+      s.onload = function () {
+        html2canvas(document.getElementById('target'), { scale: 2 }).then(function (canvas) {
+          var dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+
+          // 顯示預覽
+          preview.src = dataUrl;
+          preview.style.display = 'block';
+          log.textContent = '截圖完成！尺寸：' + canvas.width + ' x ' + canvas.height;
+
+          // 下載
+          var a = document.createElement('a');
+          a.href = dataUrl;
+          a.download = 'snapshot-test.jpg';
+          a.click();
+        });
+      };
+    });
+
+    // ── 有後端時的完整用法（取消註解即可）──
+    /*
+    document.getElementById('btn').addEventListener('click', function () {
+      DomSnapto.capture('#target', {
+        to:         'https://your-server.com/upload',
+        background: true,
+        format:     'jpeg',
+        quality:    0.9,
+        meta:       { orderId: 'TEST-001' },
+        onSuccess:  function (res) { console.log('上傳成功', res); },
+        onError:    function (err) { console.warn('上傳失敗', err); },
+      });
+    });
+    */
+  </script>
+
+</body>
+</html>
