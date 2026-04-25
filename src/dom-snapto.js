@@ -1,5 +1,5 @@
 /*!
- * dom-snapto.js
+ * dom-snapto.js v0.1.0
  * Capture any DOM element and upload it — even if the tab is closed mid-flight.
  *
  * DomSnapto.capture('#selector', options) → Promise | void

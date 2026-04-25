@@ -1,0 +1,24 @@
+{
+  "name": "dom-snapto",
+  "version": "0.1.0",
+  "description": "Capture any DOM element as an image and upload it — survives tab close and page navigation",
+  "main": "src/dom-snapto.js",
+  "files": [
+    "src/"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/KCTW/dom-snapto.git"
+  },
+  "keywords": [
+    "screenshot",
+    "dom",
+    "html2canvas",
+    "capture",
+    "upload",
+    "gcs",
+    "service-worker",
+    "background-sync"
+  ],
+  "license": "MIT"
+}
