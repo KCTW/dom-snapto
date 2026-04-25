@@ -125,6 +125,31 @@
     })).then(function () { return needsProxy; });
   }
 
+  // 在 live DOM 換成 proxy URL 並等 onload；回傳還原函式
+  function swapToProxyAndAwait(el, proxyBase, needsProxy) {
+    var swaps = [];
+    var imgs  = Array.from(el.querySelectorAll('img'));
+
+    return Promise.all(imgs.map(function (img) {
+      var origSrc = img.src;
+      if (!needsProxy.has(origSrc)) return Promise.resolve();
+      return new Promise(function (resolve) {
+        swaps.push({ img: img, orig: origSrc, prevCrossOrigin: img.crossOrigin });
+        img.crossOrigin = 'anonymous';
+        img.onload  = function () { resolve(); };
+        img.onerror = function () { resolve(); }; // 失敗也繼續，那張會空白
+        img.src = proxyBase + '?url=' + encodeURIComponent(origSrc);
+      });
+    })).then(function () {
+      return function restore() {
+        swaps.forEach(function (s) {
+          s.img.crossOrigin = s.prevCrossOrigin;
+          s.img.src = s.orig;
+        });
+      };
+    });
+  }
+
   function elementToBlob(el, opts) {
     var proxyBase = opts.imgProxy ? opts.imgProxy.replace(/\/?$/, '') : null;
 
@@ -132,9 +157,16 @@
       ? detectAndPreload(el, proxyBase)
       : Promise.resolve(new Set());
 
+    var restore = function () {};
+
     return preload.then(function (needsProxy) {
       return ensureH2C(opts.html2canvasUrl).then(function () { return needsProxy; });
     }).then(function (needsProxy) {
+      // 在 live DOM 上把需要 proxy 的圖換掉，等載完才繼續
+      if (proxyBase && needsProxy.size > 0) {
+        return swapToProxyAndAwait(el, proxyBase, needsProxy).then(function (r) { restore = r; });
+      }
+    }).then(function () {
       var h2cOpts = {
         useCORS:    true,
         allowTaint: false,
@@ -143,19 +175,13 @@
         scrollX:    0,
         scrollY:    0,
       };
-
-      if (proxyBase && needsProxy.size > 0) {
-        h2cOpts.onclone = function (doc) {
-          doc.querySelectorAll('img').forEach(function (img) {
-            if (needsProxy.has(img.src)) {
-              img.crossOrigin = 'anonymous';
-              img.src = proxyBase + '?url=' + encodeURIComponent(img.src);
-            }
-          });
-        };
-      }
-
       return html2canvas(el, h2cOpts);
+    }).then(function (canvas) {
+      restore();
+      return canvas;
+    }, function (err) {
+      restore();
+      throw err;
     }).then(function (canvas) {
       var mime    = opts.format === 'png' ? 'image/png' : 'image/jpeg';
       var quality = opts.quality != null ? opts.quality : 0.85;
