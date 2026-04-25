@@ -22,7 +22,7 @@ Capture any DOM element as an image and upload it — even if the tab is closed 
 <script>
   document.getElementById('submit-btn').addEventListener('click', function () {
     DomSnapto.capture('#order-summary', {
-      to:         '/api/snapshots',
+      to:         'https://your-server.com/upload',
       background: true,
       swPath:     '/dom-snapto-sw.js',
     });
@@ -106,7 +106,7 @@ The SW is registered automatically when `swPath` is provided in options.
 ```js
 document.querySelector('form').addEventListener('submit', async function (e) {
   await DomSnapto.capture('#checkout-form', {
-    to:   '/api/snapshots',
+    to:   'https://your-server.com/upload',
     meta: { userId: currentUser.id },
   });
   // upload finished before form submits
@@ -117,7 +117,7 @@ document.querySelector('form').addEventListener('submit', async function (e) {
 
 ```js
 DomSnapto.capture('#cart-summary', {
-  to:         '/api/snapshots',
+  to:         'https://your-server.com/upload',
   background: true,
   swPath:     '/dom-snapto-sw.js',
   meta: function () {
@@ -133,7 +133,7 @@ DomSnapto.capture('#cart-summary', {
 
 ```js
 DomSnapto.capture('.invoice-block', {
-  to:      '/api/snapshots',
+  to:      'https://your-server.com/upload',
   format:  'png',
   scale:   2,      // retina
 });
