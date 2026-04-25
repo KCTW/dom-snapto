@@ -5,6 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](package.json)
 
+**🔗 [線上 Demo](https://kctw.github.io/dom-snapto/test.html)** — 直接點按鈕看截圖效果（含跨域商品圖）
+
 ## 為什麼需要這個
 
 | 一般做法 | 問題 |
