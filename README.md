@@ -54,6 +54,7 @@ DomSnapto.capture(selector, options)
 | `quality` | `number` | `0.85` | JPEG 壓縮品質，0–1 |
 | `scale` | `number` | `1` | 像素倍率，`2` 等於 Retina 解析度 |
 | `meta` | `object`\|`function` | — | 隨圖片一起送出的額外欄位 |
+| `imgProxy` | `string` | — | 圖片 proxy 根 URL（如 Cloudflare Worker）。截圖前自動把所有 `img.src` 換成 proxy URL，解決 Rakuten CDN 等跨域圖片空白問題 |
 | `html2canvasUrl` | `string` | cdnjs | 自訂 html2canvas 的來源網址 |
 | `onSuccess` | `function` | — | 上傳成功後呼叫，收到伺服器回應 |
 | `onError` | `function` | — | 上傳失敗後呼叫 |

@@ -14,6 +14,7 @@
  *   quality       {number}          0–1, jpeg only (default: 0.85)
  *   scale         {number}          device pixel ratio (default: 1)
  *   meta          {object|function} extra fields merged into POST body
+ *   imgProxy      {string}          圖片 proxy 的根 URL（如 Cloudflare Worker），截圖前自動替換所有 img.src，解決跨域圖片空白問題
  *   html2canvasUrl {string}         override CDN URL for html2canvas
  *   onSuccess     {function}        (result) => void
  *   onError       {function}        (err) => void
@@ -97,16 +98,64 @@
 
   // ── element → Blob ────────────────────────────────────────────────────────
 
+  // 先用 CORS 直接試載，失敗才走 proxy；回傳需要 proxy 的 src Set
+  function detectAndPreload(el, proxyBase) {
+    var imgs = Array.from(el.querySelectorAll('img')).filter(function (img) {
+      return img.src && img.src.indexOf(proxyBase) === -1;
+    });
+
+    var needsProxy = new Set();
+
+    return Promise.all(imgs.map(function (img) {
+      return new Promise(function (resolve) {
+        // 先試直接 CORS 載入
+        var direct = new Image();
+        direct.crossOrigin = 'anonymous';
+        direct.onload = resolve; // 直接成功，不需要 proxy
+        direct.onerror = function () {
+          // 直接失敗，改走 proxy
+          var p = new Image();
+          p.crossOrigin = 'anonymous';
+          p.onload = function () { needsProxy.add(img.src); resolve(); };
+          p.onerror = resolve; // proxy 也失敗就放棄，不阻塞截圖
+          p.src = proxyBase + '?url=' + encodeURIComponent(img.src);
+        };
+        direct.src = img.src;
+      });
+    })).then(function () { return needsProxy; });
+  }
+
   function elementToBlob(el, opts) {
-    return ensureH2C(opts.html2canvasUrl).then(function () {
-      return html2canvas(el, {
+    var proxyBase = opts.imgProxy ? opts.imgProxy.replace(/\/?$/, '') : null;
+
+    var preload = proxyBase
+      ? detectAndPreload(el, proxyBase)
+      : Promise.resolve(new Set());
+
+    return preload.then(function (needsProxy) {
+      return ensureH2C(opts.html2canvasUrl).then(function () { return needsProxy; });
+    }).then(function (needsProxy) {
+      var h2cOpts = {
         useCORS:    true,
-        allowTaint: true,
+        allowTaint: false,
         logging:    false,
         scale:      opts.scale || 1,
         scrollX:    0,
         scrollY:    0,
-      });
+      };
+
+      if (proxyBase && needsProxy.size > 0) {
+        h2cOpts.onclone = function (doc) {
+          doc.querySelectorAll('img').forEach(function (img) {
+            if (needsProxy.has(img.src)) {
+              img.crossOrigin = 'anonymous';
+              img.src = proxyBase + '?url=' + encodeURIComponent(img.src);
+            }
+          });
+        };
+      }
+
+      return html2canvas(el, h2cOpts);
     }).then(function (canvas) {
       var mime    = opts.format === 'png' ? 'image/png' : 'image/jpeg';
       var quality = opts.quality != null ? opts.quality : 0.85;
