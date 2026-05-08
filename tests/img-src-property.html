@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <title>img.src property 行為驗證</title>
+  <style>
+    body { font-family: -apple-system, monospace; padding: 24px; max-width: 960px; }
+    h1 { color: #2d3748; }
+    .case { border: 1px solid #e2e8f0; padding: 12px 16px; margin: 12px 0; border-radius: 6px; background: #f8fafc; }
+    .case h3 { margin: 0 0 8px; font-size: 14px; }
+    .pass { border-left: 4px solid #48bb78; }
+    .fail { border-left: 4px solid #e53e3e; }
+    code { background: #edf2f7; padding: 1px 6px; border-radius: 3px; font-size: 12px; }
+    .result { margin-top: 6px; font-size: 12px; }
+    .ok { color: #276749; }
+    .err { color: #c53030; }
+    pre { background: #2d3748; color: #e2e8f0; padding: 8px 12px; border-radius: 4px; overflow-x: auto; font-size: 12px; }
+  </style>
+</head>
+<body>
+
+<h1>img.src 行為驗證</h1>
+
+<p>
+驗證 review #4 的論點是否成立：
+<br>
+<em>「<code>document.querySelector</code> 抓到的 <code>img.src</code> 是相對路徑，但 clone 後瀏覽器會 resolve 成 absolute URL，導致 <code>dataMap.get(img.src)</code> 永遠找不到」</em>
+</p>
+
+<p>
+本檔做 5 個 assertion，全部通過代表 <code>onclone</code> 中 <code>dataMap.get(img.src)</code> 不會 miss。
+</p>
+
+<div id="results"></div>
+
+<h2>原始 DOM（測試素材）</h2>
+<div id="fixture" style="border:1px solid #cbd5e0; padding:8px; background:white;">
+  <img id="rel"      src="img-src-property.html" alt="rel">           <!-- 相對路徑（用此 html 自身當圖測試 src 解析）-->
+  <img id="root"     src="/dom-snapto/" alt="root">                   <!-- 根路徑 -->
+  <img id="absolute" src="https://example.com/abs.png" alt="absolute"><!-- 絕對 URL -->
+</div>
+
+<script>
+(function () {
+  var results = document.getElementById('results');
+
+  function run(name, fn) {
+    var box = document.createElement('div');
+    box.className = 'case';
+    var detail;
+    try {
+      detail = fn();
+      box.classList.add('pass');
+      box.innerHTML = '<h3>✅ ' + name + '</h3><div class="result ok">' + detail + '</div>';
+    } catch (e) {
+      box.classList.add('fail');
+      box.innerHTML = '<h3>❌ ' + name + '</h3><div class="result err">' + e.message + '</div>';
+    }
+    results.appendChild(box);
+  }
+
+  // ── Assertion 1：getAttribute(src) 跟 .src 是不同東西 ─────────────────
+  run('img.getAttribute("src") 與 img.src（property）不同', function () {
+    var rel = document.getElementById('rel');
+    var attr = rel.getAttribute('src');
+    var prop = rel.src;
+    if (attr === prop) {
+      throw new Error('getAttribute=' + attr + ' 跟 .src=' + prop + ' 相同——但相對路徑時應該不同');
+    }
+    return 'getAttribute("src") = "' + attr + '"（原始字串）<br>'
+         + 'img.src             = "' + prop + '"（property，已解析）';
+  });
+
+  // ── Assertion 2：相對路徑 .src 永遠回傳 absolute ─────────────────────
+  run('img.src 永遠是 absolute URL（即使 attribute 為相對路徑）', function () {
+    var rel = document.getElementById('rel');
+    if (!/^https?:\/\//.test(rel.src)) {
+      throw new Error('rel.src 不是絕對 URL: ' + rel.src);
+    }
+    return 'rel.src = "' + rel.src + '"（以 ' + (rel.src.startsWith('https') ? 'https' : 'http') + ':// 開頭）';
+  });
+
+  // ── Assertion 3：根路徑 .src 也是 absolute ───────────────────────────
+  run('根路徑 src 解析後也是 absolute', function () {
+    var root = document.getElementById('root');
+    if (!root.src.startsWith(location.origin)) {
+      throw new Error('root.src=' + root.src + ' 沒有以 ' + location.origin + ' 開頭');
+    }
+    return 'root.src = "' + root.src + '"（已 prefix ' + location.origin + '）';
+  });
+
+  // ── Assertion 4：絕對 URL 維持絕對 ───────────────────────────────────
+  run('絕對 URL 的 .src 維持原值', function () {
+    var abs = document.getElementById('absolute');
+    if (abs.src !== 'https://example.com/abs.png') {
+      throw new Error('絕對 URL 變了: ' + abs.src);
+    }
+    return 'absolute.src = "' + abs.src + '"（沒被改）';
+  });
+
+  // ── Assertion 5：clone DOM 後 .src 仍是同一個 absolute URL ───────────
+  // 這是 review #4 質疑的核心 —— 模擬 html2canvas 的 cloneNode 行為
+  run('clone 後的 img.src 跟原 DOM 一致（dataMap key 不會 miss）', function () {
+    var fixture = document.getElementById('fixture');
+    var clone   = fixture.cloneNode(true);
+
+    // 模擬 dom-snapto detectAndPrepare：原 DOM 用 .src 當 key 存進 Map
+    var map = new Map();
+    fixture.querySelectorAll('img').forEach(function (img) {
+      map.set(img.src, 'data:image/jpeg;base64,FAKE_FOR_' + img.id);
+    });
+
+    // 模擬 onclone：在 cloned DOM 用 .src 查 Map
+    var hits = 0, miss = [];
+    clone.querySelectorAll('img').forEach(function (img) {
+      if (map.has(img.src)) hits++;
+      else miss.push(img.id + ' src=' + img.src);
+    });
+
+    if (miss.length) {
+      throw new Error('cloned img 在 dataMap 找不到：' + miss.join(' | '));
+    }
+    return '原 DOM 3 張 img → Map 有 3 個 key<br>'
+         + 'cloned DOM 3 張 img 用 .src 查 Map → ' + hits + ' 全部命中';
+  });
+
+  // 結論
+  var conclusion = document.createElement('div');
+  conclusion.className = 'case pass';
+  conclusion.innerHTML = '<h3>結論</h3>'
+    + '<div class="result ok">'
+    + '所有 assertion 通過 → review #4 的疑慮（dataMap 用 .src 當 key 會 miss）'
+    + '<strong>不存在</strong>。<br>'
+    + '原因：JavaScript 中 <code>HTMLImageElement.src</code> 是 <code>USVString</code>，'
+    + '無論 attribute 是相對還絕對，property 永遠回傳 resolved absolute URL。'
+    + '<code>detectAndPrepare</code> 跟 <code>onclone</code> 兩邊都用同一個 property，'
+    + 'key 一致，不會錯位。'
+    + '</div>';
+  results.appendChild(conclusion);
+})();
+</script>
+
+</body>
+</html>

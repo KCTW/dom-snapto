@@ -7,19 +7,30 @@
  * License: MIT (https://github.com/KCTW/dom-snapto/blob/main/LICENSE)
  *
  * 使用方式：
- *   DomSnapto.init({ swPath: '/dom-snapto-sw.js' });   // 頁面載入時執行一次
- *   DomSnapto.capture('#selector', options);            // 之後隨時呼叫
+ *   DomSnapto.init({                              // 頁面載入時執行一次
+ *     swPath:         '/dom-snapto-sw.js',
+ *     html2canvasUrl: 'https://my-cdn/html2canvas-pro.min.js',  // 可選
+ *     imgProxy:       'https://my-proxy.workers.dev',           // 可選，全域預設
+ *   });
+ *   DomSnapto.capture('#selector', options);                    // 之後隨時呼叫
  *
- * capture() Options:
+ * init() Options（一次性、全 session 共用）:
+ *   swPath         {string}          dom-snapto-sw.js 的路徑（要用 background 模式必填）
+ *   html2canvasUrl {string}          html2canvas-pro CDN URL（預設 jsdelivr 上的 v2）。
+ *                                    library 用 singleton 只載入一次，所以這個只能在 init() 設。
+ *   imgProxy       {string}          imgProxy 的全域預設值，capture() 可覆蓋。
+ *
+ * capture() Options（每次截圖獨立）:
  *   to            {string}          POST endpoint URL
- *   gcs           {object}          { signedUrl, contentType? } — PUT directly to GCS
+ *   gcs           {object}          { signedUrl, contentType? } — PUT directly to GCS / S3
  *   background    {boolean}         true = fire-and-forget; tab close still completes (default: false)
  *   format        {'jpeg'|'png'}    (default: 'jpeg')
  *   quality       {number}          0–1, jpeg only (default: 0.85)
  *   scale         {number}          device pixel ratio (default: 1)
  *   meta          {object|function} extra fields merged into POST body
- *   imgProxy      {string}          圖片 proxy 的根 URL（如 Cloudflare Worker），截圖前自動替換所有 img.src，解決跨域圖片空白問題
- *   html2canvasUrl {string}         override CDN URL for html2canvas
+ *   imageField    {string}          自訂圖片欄位名（multipart 上傳時，預設 'image'）
+ *   credentials   {RequestCredentials} fetch credentials 模式（預設 'same-origin'）
+ *   imgProxy      {string}          覆蓋 init() 的 imgProxy 設定
  *   onSuccess     {function}        (result) => void
  *   onError       {function}        (err) => void
  */
@@ -46,12 +57,15 @@
 
   var _h2cReady = null;
 
-  function ensureH2C(cdnUrl) {
+  // html2canvas 是 singleton：整個 session 只載入一次。
+  // CDN URL 從 init() 設定的 _config.html2canvasUrl 讀取，不接受 per-capture 覆蓋
+  // （per-call 切 URL 對 singleton 沒意義，反而誘導使用者寫出 silent failure 的程式）。
+  function ensureH2C() {
     if (_h2cReady) return _h2cReady;
     _h2cReady = new Promise(function (resolve, reject) {
       if (window.html2canvas) { resolve(); return; }
       var s = document.createElement('script');
-      s.src = cdnUrl || H2C_URL;
+      s.src = _config.html2canvasUrl || H2C_URL;
       s.onload = resolve;
       s.onerror = function () { reject(new Error('[dom-snapto] failed to load html2canvas')); };
       document.head.appendChild(s);
@@ -78,15 +92,29 @@
 
   // ── IndexedDB helpers ─────────────────────────────────────────────────────
 
+  // IDBDatabase 連線快取：第一次開啟後留著重用，避免每次 dbPut 都 open。
+  // 連線意外關閉（onclose、versionchange）時自動重置，下次呼叫會重開。
+  var _dbReady = null;
+
   function openDB() {
-    return new Promise(function (resolve, reject) {
+    if (_dbReady) return _dbReady;
+    _dbReady = new Promise(function (resolve, reject) {
       var req = indexedDB.open(DB_NAME, 1);
       req.onupgradeneeded = function (e) {
         e.target.result.createObjectStore(DB_STORE, { keyPath: 'id', autoIncrement: true });
       };
-      req.onsuccess = function (e) { resolve(e.target.result); };
-      req.onerror   = function (e) { reject(e.target.error); };
+      req.onsuccess = function (e) {
+        var db = e.target.result;
+        db.onclose         = function () { _dbReady = null; };
+        db.onversionchange = function () { db.close(); _dbReady = null; };
+        resolve(db);
+      };
+      req.onerror = function (e) {
+        _dbReady = null; // 失敗不要鎖死，下次重試
+        reject(e.target.error);
+      };
     });
+    return _dbReady;
   }
 
   function dbPut(record) {
@@ -150,7 +178,7 @@
       : Promise.resolve(new Map());
 
     return preload.then(function (dataMap) {
-      return ensureH2C(opts.html2canvasUrl).then(function () { return dataMap; });
+      return ensureH2C().then(function () { return dataMap; });
     }).then(function (dataMap) {
       var h2cOpts = {
         useCORS:    true,
@@ -186,20 +214,26 @@
 
   // ── upload helpers ────────────────────────────────────────────────────────
 
-  function uploadToUrl(blob, opts) {
-    var meta      = typeof opts.meta === 'function' ? opts.meta() : (opts.meta || {});
-    var imgField  = opts.imageField || 'image';
-    var ext       = opts.format === 'png' ? 'png' : 'jpg';
+  // 把 blob + meta 包成 multipart/form-data。
+  // fetch 跟 sendBeacon 兩條路徑共用同一份格式邏輯，避免「fetch 走 multipart、
+  // sendBeacon 卻送 raw blob」這種不一致導致 server 收不到圖。
+  function buildUploadForm(blob, opts) {
+    var meta     = typeof opts.meta === 'function' ? opts.meta() : (opts.meta || {});
+    var imgField = opts.imageField || 'image';
+    var ext      = opts.format === 'png' ? 'png' : 'jpg';
 
     var form = new FormData();
     form.append(imgField, blob, 'snapshot.' + ext);
     form.append('capturedAt', new Date().toISOString());
     form.append('pageUrl', location.href);
     Object.keys(meta).forEach(function (k) { form.append(k, meta[k]); });
+    return form;
+  }
 
+  function uploadToUrl(blob, opts) {
     return fetch(opts.to, {
       method:      'POST',
-      body:        form,
+      body:        buildUploadForm(blob, opts),
       credentials: opts.credentials || 'same-origin',
     }).then(function (res) {
       if (!res.ok) throw new Error('[dom-snapto] server returned ' + res.status);
@@ -237,8 +271,20 @@
 
   function queueAndSync(blob, opts) {
     if (!support.serviceWorker || !support.indexedDB) {
+      // 沒有 SW + IDB queue 可用時，最後一招是 sendBeacon（頁面 unload 後仍會送）。
+      // 但 sendBeacon 的 body 必須符合對方期望的格式：
+      //   - opts.to 對自家 server → 用 FormData（與 uploadToUrl 一致），server 用 $_FILES 才接得到
+      //   - opts.gcs.signedUrl 對 S3/GCS PUT → 用 raw blob（PUT body 就是檔案本身）
+      // 兩者都失敗才退到 fire-and-forget fetch。
+      var dest = opts.to || (opts.gcs && opts.gcs.signedUrl);
+      if (!dest) return; // 沒地方送就放棄
+
       if (support.sendBeacon && blob.size < 60 * 1024) {
-        navigator.sendBeacon(opts.to || opts.gcs.signedUrl, blob);
+        if (opts.to) {
+          navigator.sendBeacon(opts.to, buildUploadForm(blob, opts));
+        } else {
+          navigator.sendBeacon(opts.gcs.signedUrl, blob);
+        }
       } else {
         (opts.gcs ? uploadToGCS(blob, opts) : uploadToUrl(blob, opts)).catch(function () {});
       }
@@ -246,6 +292,18 @@
     }
 
     var meta = typeof opts.meta === 'function' ? opts.meta() : (opts.meta || {});
+
+    // expiresAt：signed URL 有 TTL（S3/GCS presigned 通常 60 秒）
+    // SW 重試時若已過期，PUT 一定 4xx，所以寫進 record 給 SW 判斷直接放棄。
+    // opts.gcs.expiresAt 是 epoch ms（ISO 字串也可），呼叫端可選提供。
+    // 沒提供就讓 SW 用「7 天 fallback」邏輯處理。
+    var expiresAt = null;
+    if (opts.gcs && opts.gcs.expiresAt) {
+      expiresAt = typeof opts.gcs.expiresAt === 'string'
+        ? Date.parse(opts.gcs.expiresAt)
+        : opts.gcs.expiresAt;
+    }
+
     var record = {
       blob:        blob,
       to:          opts.to  || null,
@@ -256,7 +314,16 @@
       meta:        meta,
       pageUrl:     location.href,
       createdAt:   new Date().toISOString(),
+      expiresAt:   expiresAt,
     };
+
+    // 沒呼叫過 init({swPath:...}) 的話 _swReady 會是 null，背景模式無法走 SW
+    // 路徑（分頁關掉就斷）。提示使用者，避免 silent fallback 不知道為什麼沒生效。
+    if (!_swReady) {
+      console.warn('[dom-snapto] background mode: SW not registered. ' +
+                   'Did you forget DomSnapto.init({ swPath: "..." })? ' +
+                   'Falling back to fire-and-forget fetch (won\'t survive tab close).');
+    }
 
     dbPut(record).then(function () {
       return _swReady;
@@ -284,8 +351,11 @@
       if (!opts.to && !opts.gcs) return blob;
 
       if (opts.background) {
+        // 背景模式 fire-and-forget：blob 已交給 SW/IDB queue 或 sendBeacon，
+        // 沒有「server response」可以給 onSuccess。回 undefined 比 {} 語意清楚，
+        // 跟「無 destination 直接回 blob」也不會混淆。
         queueAndSync(blob, opts);
-        return {};
+        return;
       }
       return opts.gcs ? uploadToGCS(blob, opts) : uploadToUrl(blob, opts);
     });
@@ -314,9 +384,8 @@
       opts = opts || {};
 
       // 合併 init() 帶入的全域設定
-      var merged = {};
-      for (var k in _config) merged[k] = _config[k];
-      for (var k in opts)    merged[k] = opts[k];
+      // 用 Object.assign 取代雙重 for-in，避免 var k 重複宣告與 hoisting 誤解。
+      var merged = Object.assign({}, _config, opts);
 
       var promise = run(selector, merged)
         .then(function (result) {

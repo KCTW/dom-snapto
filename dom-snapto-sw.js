@@ -90,18 +90,42 @@ function uploadToGCS(job) {
 
 // ── flush all queued jobs ─────────────────────────────────────────────────
 
+// 失敗 job 在 IDB 留多久後直接放棄（避免無限累積佔空間）
+var MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function isExpired(job, now) {
+  // signed URL（GCS / S3 presigned）有 TTL，過期後 PUT 一定 4xx，
+  // 留著 retry 沒意義。capture() 寫入 record 時順手記 expiresAt，
+  // SW 醒來重試前先檢查；過期就直接刪掉。
+  if (job.expiresAt && now > job.expiresAt) return true;
+
+  // 沒指定 expiresAt 的 job（例如純 opts.to 模式），用 createdAt + MAX_AGE_MS
+  if (job.createdAt) {
+    var createdMs = Date.parse(job.createdAt);
+    if (!isNaN(createdMs) && (now - createdMs) > MAX_AGE_MS) return true;
+  }
+  return false;
+}
+
 function flushQueue() {
+  var now = Date.now();
   return openDB().then(function (db) {
     return getAllJobs(db).then(function (jobs) {
       var chain = Promise.resolve();
       jobs.forEach(function (job) {
         chain = chain.then(function () {
+          // 先做過期清理：URL 失效或 job 太老就直接刪
+          if (isExpired(job, now)) {
+            console.warn('[dom-snapto-sw] dropping expired job', job.id, 'createdAt=' + job.createdAt);
+            return deleteJob(db, job.id);
+          }
           return uploadJob(job).then(function () {
             return deleteJob(db, job.id);
           }).catch(function (err) {
-            // Leave failed job in DB so Background Sync retries it
-            console.error('[dom-snaptoto-sw] upload failed (will retry):', err.message);
-            throw err; // re-throw so Background Sync knows to retry
+            // 留在 DB 等 Background Sync retry，但下次 flush 時會被
+            // 上面的 isExpired() 判斷後清掉，避免永久卡。
+            console.error('[dom-snapto-sw] upload failed (will retry):', err.message);
+            throw err;
           });
         });
       });
